@@ -385,43 +385,48 @@ def sensor_detail(sensor_id):
             margin=dict(l=20, r=20, t=40, b=20)
         )
         
-        # Gráfica de luz
+        # Gráfica de luz en foot-candles
+        # Inicializar parámetros de conversión
+        DEFAULT_FOOT_CANDLES = float(os.environ.get('DEFAULT_FOOT_CANDLES', 12))
+        threshold_fc = float(os.environ.get('THRESHOLD_FOOT_CANDLES', 7))
+        # Calcular valores en fc basados en max_luz
+        fc_values = [l / max_luz * DEFAULT_FOOT_CANDLES for l in luz] if (luz and max_luz) else []
+        # Calcular tendencia en fc
+        fc_pred = [p / 100 * DEFAULT_FOOT_CANDLES for p in luz_pred] if (luz_pred and max_luz) else []
+        
         fig_luz = go.Figure()
+        # Trazar nivel de luz en fc
         fig_luz.add_trace(go.Scatter(
-            x=timestamps, 
-            y=luz,
+            x=timestamps,
+            y=fc_values,
             mode='lines+markers',
-            name='Nivel de Luz',
+            name='Nivel de Luz (fc)',
             line=dict(color='#f59e0b', width=2),
             marker=dict(size=4)
         ))
         
-        # Si hay datos de predicción, agregarlos a la gráfica
-        if fechas_pred is not None and luz_pred is not None and max_luz is not None:
-            # Convertir porcentaje a valor absoluto
-            luz_pred_abs = [p * max_luz / 100 for p in luz_pred]
-            
+        # Si hay datos de predicción, agregarlos
+        if fechas_pred is not None and fc_pred:
             fig_luz.add_trace(go.Scatter(
                 x=fechas_pred,
-                y=luz_pred_abs,
+                y=fc_pred,
                 mode='lines',
-                name='Tendencia',
+                name='Tendencia FC',
                 line=dict(color='#ef4444', width=2, dash='dash')
             ))
-            
-            # Línea horizontal para 80%
+            # Umbral fijo en fc
             fig_luz.add_trace(go.Scatter(
                 x=[min(timestamps), max(fechas_pred)],
-                y=[0.8 * max_luz, 0.8 * max_luz],
+                y=[threshold_fc, threshold_fc],
                 mode='lines',
-                name='80% Umbral',
+                name=f'Umbral {threshold_fc} fc',
                 line=dict(color='#10b981', width=1.5, dash='dot')
             ))
-            
+        
         fig_luz.update_layout(
             title='Nivel de Luz vs. Tiempo',
             xaxis_title='Fecha',
-            yaxis_title='Nivel de Luz (lux)',
+            yaxis_title='Nivel de Luz (fc)',
             hovermode='x unified',
             height=400,
             template='plotly_white',
@@ -434,7 +439,7 @@ def sensor_detail(sensor_id):
         
         # Obtener último valor para mostrar en tiempo real
         current_temp = temperaturas[-1] if temperaturas else None
-        current_luz = luz[-1] if luz else None
+        current_fc = fc_values[-1] if fc_values else None
         
         # Obtener fecha actual para la plantilla
         current_date = datetime.now(LOCAL_TZ).strftime('%d/%m/%Y %H:%M:%S')
@@ -446,13 +451,14 @@ def sensor_detail(sensor_id):
             plot_temp=plot_temp,
             plot_luz=plot_luz,
             current_temp=current_temp,
-            current_luz=current_luz,
+            current_fc=current_fc,
             start_date=start_date_str,
             end_date=end_date_str,
             fecha_80=fecha_80,
             current_date=current_date,
             led_state=get_led_state(),
-            user=session.get('user')
+            user=session.get('user'),
+            threshold_fc=threshold_fc
         )
         
     except Exception as e:

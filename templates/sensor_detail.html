@@ -78,13 +78,20 @@
                 <p class="text-sm text-gray-500 mt-2">Última lectura</p>
             </div>
             <div class="bg-white rounded-lg shadow p-6">
-                <h3 class="text-lg font-semibold text-gray-800 mb-2">Nivel de Luz</h3>
+                <h3 class="text-lg font-semibold text-gray-800 mb-2">Nivel de Luz (fc)</h3>
                 <p class="text-3xl font-bold text-yellow-600">
-                    {% if current_luz %}{{ current_luz|round(0) }} lux{% else %}-- lux{% endif %}
+                    {% if current_fc %}{{ current_fc|round(1) }} fc{% else %}-- fc{% endif %}
                 </p>
                 <p class="text-sm text-gray-500 mt-2">Última lectura</p>
             </div>
         </div>
+
+        {% if current_fc and threshold_fc and current_fc < threshold_fc %}
+        <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-8 rounded">
+            <p class="font-bold">Advertencia:</p>
+            <p>La luminaria ya no funciona (por debajo de {{ threshold_fc }} fc).</p>
+        </div>
+        {% endif %}
 
         {% if fecha_80 %}
         <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-8">
