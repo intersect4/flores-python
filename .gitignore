@@ -42,3 +42,11 @@ venv.bak/
 htmlcov/ 
 
 ensayos-rack-firebase-adminsdk-jkauk-cfa68835d5.json
+
+*.zip
+*.rar
+*.7z
+*.tar
+*.gz
+*.bz2
+*.deb
