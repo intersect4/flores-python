@@ -47,6 +47,9 @@ except Exception as e:
     print(f"Error al inicializar Firebase: {e}")
     raise
 
+# Cache para estado del LED
+cached_led_state = None
+
 # Decorador para verificar autenticación
 def login_required(f):
     @wraps(f)
@@ -217,13 +220,18 @@ def get_display_name(sensor_id):
     return sensor_id
 
 def get_led_state():
-    """Obtiene el estado actual del LED desde RTDB"""
+    """Obtiene el estado actual del LED desde cache o RTDB"""
+    global cached_led_state
+    if cached_led_state is not None:
+        return cached_led_state
     try:
         led_ref = db.reference(LED_CONTROL_PATH)
         state = led_ref.get()
-        return state if state is not None else False
+        cached_led_state = state if state is not None else False
+        return cached_led_state
     except Exception as e:
         logging.error(f"Error al obtener estado del LED: {e}")
+        cached_led_state = False
         return False
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -340,10 +348,10 @@ def sensor_detail(sensor_id):
             # Ajustar al final del día
             end_date = end_date.replace(hour=23, minute=59, second=59)
             
-        # Si no se proporciona fecha, usar último día
+        # Si no se proporciona fecha, usar último mes
         if not start_date and not end_date and not view_all:
             end_date = datetime.now(LOCAL_TZ)
-            start_date = end_date - timedelta(days=1)
+            start_date = end_date - relativedelta(months=1)
             
         # Obtener datos del sensor
         timestamps, temperaturas, luz, fechas_pred, luz_pred, fecha_80, max_luz = get_sensor_data(
@@ -392,7 +400,7 @@ def sensor_detail(sensor_id):
         # Calcular valores en fc basados en max_luz
         fc_values = [l / max_luz * DEFAULT_FOOT_CANDLES for l in luz] if (luz and max_luz) else []
         # Calcular tendencia en fc
-        fc_pred = [p / 100 * DEFAULT_FOOT_CANDLES for p in luz_pred] if (luz_pred and max_luz) else []
+        fc_pred = [p / 100 * DEFAULT_FOOT_CANDLES for p in luz_pred] if (luz_pred is not None and max_luz) else []
         
         fig_luz = go.Figure()
         # Trazar nivel de luz en fc
@@ -507,10 +515,12 @@ total_active_phase_duration_minutes = ACTIVE_PHASE_MINUTES
 scheduler = BackgroundScheduler(daemon=True, timezone=LOCAL_TZ)
 
 def update_led_state(state: bool):
-    """Actualiza el estado del LED en Firebase RTDB."""
+    """Actualiza el estado del LED en Firebase RTDB y cachea"""
+    global cached_led_state
     try:
         led_ref = db.reference(LED_CONTROL_PATH)
         led_ref.set(state)
+        cached_led_state = state
         logging.info(f"Estado del LED actualizado a: {state}")
     except Exception as e:
         logging.error(f"Error al actualizar estado del LED: {e}")

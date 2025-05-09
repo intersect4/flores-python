@@ -1,0 +1,10 @@
+firebase-functions
+firebase-admin==6.4.0
+flask==3.0.2
+plotly==5.19.0
+pytz==2024.1
+numpy==1.26.4
+scikit-learn==1.4.1.post1
+python-dateutil==2.8.2
+APScheduler
+pyrebase4==4.7.1 
