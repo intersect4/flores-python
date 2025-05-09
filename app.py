@@ -1,6 +1,6 @@
 from flask import Flask, render_template, jsonify, request
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, db
 import plotly.graph_objects as go
 from plotly.utils import PlotlyJSONEncoder
 import json
@@ -22,19 +22,19 @@ cred_path = 'ensayos-rack-firebase-adminsdk-jkauk-cfa68835d5.json'
 if not os.path.exists(cred_path):
     raise FileNotFoundError(f"Archivo de credenciales no encontrado: {cred_path}")
 
-# Inicializar Firebase
+# Inicializar Firebase con RTDB
 try:
     cred = credentials.Certificate(cred_path)
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
+    firebase_admin.initialize_app(cred, {
+        'databaseURL': 'https://ensayos-rack-default-rtdb.firebaseio.com'
+    })
 except Exception as e:
     print(f"Error al inicializar Firebase: {e}")
     raise
 
-def convert_to_local_time(utc_dt):
-    """Convierte tiempo UTC a tiempo local (UTC-5)"""
-    if utc_dt.tzinfo is None:
-        utc_dt = pytz.UTC.localize(utc_dt)
+def convert_to_local_time(timestamp_ms):
+    """Convierte timestamp en milisegundos a tiempo local (UTC-5)"""
+    utc_dt = datetime.fromtimestamp(timestamp_ms/1000, pytz.UTC)
     return utc_dt.astimezone(LOCAL_TZ)
 
 def analizar_depreciacion_luz(timestamps, valores_luz):
@@ -75,175 +75,116 @@ def analizar_depreciacion_luz(timestamps, valores_luz):
     
     return fechas_pred, luz_pred, fecha_80, max_luz
 
-# Caché de sensores (válido por 1 hora)
-@lru_cache(maxsize=1)
-def get_cached_sensors():
-    """Obtiene y almacena en caché la lista de sensores"""
-    timestamp = datetime.now().replace(minute=0, second=0, microsecond=0)  # Actualiza cada hora
-    return get_unique_sensors_from_db(), timestamp
-
-def get_unique_sensors():
-    """Obtiene la lista de deviceId únicos con caché"""
-    cached_data, _ = get_cached_sensors()
-    return cached_data
-
-def get_unique_sensors_from_db():
-    """Obtiene la lista de deviceId únicos de Firestore de manera optimizada."""
+def get_sensors_list():
+    """Obtiene la lista de sensores desde RTDB"""
     try:
-        # Mejor enfoque: crear una colección de sensores o usar un documento de metadatos
-        # Solución temporal: usar una consulta agregada para reducir datos transferidos
-        sensors_ref = db.collection('lecturasSensores').select(['deviceId']).limit(500).stream()
-        unique_sensors = set()
-        for sensor in sensors_ref:
-            unique_sensors.add(sensor.to_dict()['deviceId'])
-        return sorted(list(unique_sensors))
+        sensors_ref = db.reference('sensores')
+        sensors_data = sensors_ref.get()
+        if not sensors_data:
+            return []
+        
+        # Devolver las claves como strings, sin convertir a enteros
+        sensors = sorted(list(sensors_data.keys()))
+        return sensors
     except Exception as e:
         print(f"Error al obtener lista de sensores: {e}")
         return []
 
-def get_sensor_data(device_id, start_date_req=None, end_date_req=None):
+def get_sensor_data(sensor_id, start_date=None, end_date=None):
     """
-    Obtiene datos del sensor de manera optimizada.
+    Obtiene datos del sensor desde RTDB.
     """
     try:
-        # 1. Determinar el rango de fechas para la visualización
-        query_base = db.collection('lecturasSensores').where('deviceId', '==', device_id)
+        # Referencia al sensor específico
+        sensor_ref = db.reference(f'sensores/{sensor_id}')
+        sensor_data = sensor_ref.get()
         
-        if start_date_req and end_date_req:
-            # Rango específico del usuario
-            start_date_vis = start_date_req
-            end_date_vis = end_date_req
-        elif start_date_req:
-            # Solo fecha de inicio (mostrar ese día)
-            start_date_vis = start_date_req
-            end_date_vis = start_date_req.replace(hour=23, minute=59, second=59, microsecond=999999)
-        elif end_date_req:
-             # Solo fecha de fin (mostrar ese día)
-            start_date_vis = end_date_req.replace(hour=0, minute=0, second=0, microsecond=0)
-            end_date_vis = end_date_req
-        else:
-            # Por defecto: último día registrado
-            try:
-                # Optimización: limitar a sólo un registro para el último timestamp
-                latest_doc = query_base.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(1).stream()
-                last_timestamp_utc = next(latest_doc).to_dict()['timestamp']
-                last_timestamp_local = convert_to_local_time(last_timestamp_utc)
-                start_date_vis = last_timestamp_local.replace(hour=0, minute=0, second=0, microsecond=0)
-                end_date_vis = last_timestamp_local.replace(hour=23, minute=59, second=59, microsecond=999999)
-            except StopIteration:
-                 # No hay datos para este sensor
-                return [], [], [], [], None, None, None, None
+        if not sensor_data:
+            return [], [], [], None, None, None, None
 
-        # Convertir fechas de visualización a UTC para la consulta
-        start_utc_vis = start_date_vis.astimezone(pytz.UTC)
-        end_utc_vis = end_date_vis.astimezone(pytz.UTC)
-
-        # 2. Obtener datos para visualización (rango determinado)
-        # OPTIMIZACIÓN: Limitar a máximo 1000 lecturas para visualización
-        docs_vis = query_base.where('timestamp', '>=', start_utc_vis)\
-                             .where('timestamp', '<=', end_utc_vis)\
-                             .order_by('timestamp')\
-                             .limit(1000)\
-                             .stream()
+        # Procesar datos por mes
+        all_readings = []
+        for month, readings in sensor_data.items():
+            if isinstance(readings, dict):  # Asegurarse de que es un diccionario
+                for date_ts, reading in readings.items():
+                    # Convertir timestamp a datetime
+                    if 'fecha' in reading:
+                        ts = convert_to_local_time(reading['fecha'])
+                        
+                        # Filtrar por fecha si se proporcionaron rangos
+                        if (start_date and ts < start_date) or (end_date and ts > end_date):
+                            continue
+                            
+                        temperatura = reading.get('temperatura', 0)
+                        luz = reading.get('luz', 0)
+                        
+                        all_readings.append((ts, temperatura, luz))
         
-        data_vis = []
-        for doc in docs_vis:
-            data = doc.to_dict()
-            ts_local = convert_to_local_time(data['timestamp'])
-            data_vis.append((ts_local, data['temperatura'], data['luz'], data['humedad']))
+        # Ordenar lecturas por timestamp
+        all_readings.sort(key=lambda x: x[0])
         
-        # No hay datos para visualizar
-        if not data_vis:
-            return [], [], [], [], None, None, None, None
-        
-        # 3. OPTIMIZACIÓN: Reducir datos para análisis histórico
-        # En lugar de siempre traer 100 puntos, usar una muestra más pequeña
-        # y solo si realmente se necesita para predicción
-        datos_hist_necesarios = 30  # Reducir de 100 a 30
-        data_hist = []
-        
-        # Solo traer históricos si hay suficientes puntos de luz > 100 para predicción
-        luz_vis = [d[2] for d in data_vis]
-        if sum(1 for l in luz_vis if l > 100) >= 5:  # Solo si hay al menos 5 puntos útiles
-            oldest_ts = min(d[0] for d in data_vis)
-            oldest_utc = oldest_ts.astimezone(pytz.UTC)
+        # Si no hay datos, retornar listas vacías
+        if not all_readings:
+            return [], [], [], None, None, None, None
             
-            # Traer puntos históricos antes del rango de visualización
-            docs_hist = query_base.where('timestamp', '<', start_utc_vis)\
-                                  .order_by('timestamp', direction=firestore.Query.DESCENDING)\
-                                  .limit(datos_hist_necesarios)\
-                                  .stream()
-            
-            for doc in docs_hist:
-                data = doc.to_dict()
-                ts_local = convert_to_local_time(data['timestamp'])
-                data_hist.append((ts_local, data['temperatura'], data['luz'], data['humedad']))
-
-        # 4. Combinar datos, eliminando duplicados
-        all_data = data_vis + data_hist
-        timestamps_all = [d[0] for d in all_data]
-        temperaturas_all = [d[1] for d in all_data]
-        luz_all = [d[2] for d in all_data]
-        humedad_all = [d[3] for d in all_data]
-
-        # 5. Analizar depreciación solo si hay suficientes datos
+        # Separar datos para gráficas
+        timestamps = [r[0] for r in all_readings]
+        temperaturas = [r[1] for r in all_readings]
+        luz = [r[2] for r in all_readings]
+        
+        # Análisis de depreciación de luz
         fechas_pred, luz_pred, fecha_80, max_luz = None, None, None, None
-        if len(all_data) >= 10:  # Solo analizar si hay suficientes puntos
-            fechas_pred, luz_pred, fecha_80, max_luz = analizar_depreciacion_luz(timestamps_all, luz_all)
-
-        # 6. Preparar datos de VISUALIZACIÓN para retornar
-        timestamps_vis = [d[0] for d in data_vis]
-        temperaturas_vis = [d[1] for d in data_vis]
-        luz_vis = [d[2] for d in data_vis]
-        humedad_vis = [d[3] for d in data_vis]
-
-        return timestamps_vis, temperaturas_vis, luz_vis, humedad_vis, \
-               fechas_pred, luz_pred, fecha_80, max_luz
-
+        if len(all_readings) >= 10:  # Solo analizar si hay suficientes puntos
+            fechas_pred, luz_pred, fecha_80, max_luz = analizar_depreciacion_luz(timestamps, luz)
+            
+        return timestamps, temperaturas, luz, fechas_pred, luz_pred, fecha_80, max_luz
+            
     except Exception as e:
-        print(f"Error al obtener datos: {e}")
+        print(f"Error al obtener datos del sensor {sensor_id}: {e}")
         import traceback
-        traceback.print_exc() # Imprimir traceback completo
-        return [], [], [], [], None, None, None, None
+        traceback.print_exc()
+        return [], [], [], None, None, None, None
 
 @app.route('/')
 def index():
+    """Página principal con las 4 tarjetas de sensores"""
     try:
-        all_sensors = get_unique_sensors()
-        default_sensor = all_sensors[0] if all_sensors else None # Manejar caso sin sensores
-        device_id = request.args.get('device_id', default_sensor)
+        sensors = get_sensors_list()
+        return render_template('index.html', sensors=sensors)
+    except Exception as e:
+        print(f"Error en la página principal: {e}")
+        return render_template('index.html', error=str(e))
+
+@app.route('/sensor/<sensor_id>')
+def sensor_detail(sensor_id):
+    """Página de detalle para un sensor específico"""
+    try:
+        # No convertir sensor_id a entero
         
-        # Asegurar que el device_id seleccionado es válido o usar el default
-        if not device_id or (all_sensors and device_id not in all_sensors):
-             device_id = default_sensor
-
-        if not device_id:
-            # No hay sensores disponibles o seleccionados
-            return render_template('index.html', error="No hay sensores disponibles o seleccionados.")
-
         # Procesar fechas del formulario
         start_date_str = request.args.get('start_date', '')
         end_date_str = request.args.get('end_date', '')
         start_date, end_date = None, None
+        
         try:
             if start_date_str:
                 start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
                 start_date = LOCAL_TZ.localize(start_date)
         except ValueError:
-            start_date = None # Ignorar fecha inválida
+            start_date = None
+            
         try:
-             if end_date_str:
+            if end_date_str:
                 end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
-                # Para incluir el día completo, ajustar a fin del día
                 end_date = end_date.replace(hour=23, minute=59, second=59, microsecond=999999)
                 end_date = LOCAL_TZ.localize(end_date)
         except ValueError:
-            end_date = None # Ignorar fecha inválida
+            end_date = None
 
-        # Obtener datos: La función ahora maneja la lógica de fechas por defecto/rango
-        # y devuelve solo los datos para graficar en las primeras 4 variables
-        timestamps, temperaturas, luz, humedad, \
-        fechas_pred, luz_pred, fecha_80, max_luz = get_sensor_data(device_id, start_date, end_date)
+        # Obtener datos del sensor
+        timestamps, temperaturas, luz, fechas_pred, luz_pred, fecha_80, max_luz = get_sensor_data(
+            sensor_id, start_date, end_date
+        )
         
         # Configuración común para las gráficas
         common_layout = dict(
@@ -253,101 +194,118 @@ def index():
             font=dict(family='Arial, sans-serif'),
             xaxis=dict(
                 gridcolor='rgba(0,0,0,0.1)',
-                showgrid=True,
-                zeroline=False
+                zerolinecolor='rgba(0,0,0,0.1)'
             ),
             yaxis=dict(
                 gridcolor='rgba(0,0,0,0.1)',
-                showgrid=True,
-                zeroline=False
+                zerolinecolor='rgba(0,0,0,0.1)'
             )
         )
         
-        # Gráfica de temperatura
-        fig_temp = go.Figure()
-        fig_temp.add_trace(go.Scatter(
-            x=timestamps,
-            y=temperaturas,
-            mode='lines',
-            name='Temperatura',
-            line=dict(color='#2563eb', width=2)
-        ))
-        fig_temp.update_layout(
-            title='Temperatura vs Tiempo',
-            yaxis_title='Temperatura (°C)',
-            **common_layout
-        )
-        
-        # Gráfica de luz con predicción
-        fig_luz = go.Figure()
-        if luz:
-            # Mantener los valores en lux
+        # Crear gráficos solo si hay datos
+        if timestamps:
+            # Gráfico de temperatura
+            fig_temp = go.Figure()
+            fig_temp.add_trace(go.Scatter(
+                x=timestamps, 
+                y=temperaturas,
+                mode='lines',
+                name='Temperatura',
+                line=dict(color='#2563eb', width=2)
+            ))
+            fig_temp.update_layout(
+                title='Temperatura a lo largo del tiempo',
+                yaxis_title='Temperatura (°C)',
+                **common_layout
+            )
+            
+            # Gráfico de luz
+            fig_luz = go.Figure()
             fig_luz.add_trace(go.Scatter(
-                x=timestamps,
+                x=timestamps, 
                 y=luz,
                 mode='lines',
-                name='Luz Actual',
-                line=dict(color='#ca8a04', width=2)
+                name='Nivel de Luz',
+                line=dict(color='#d97706', width=2)
             ))
             
-            # Línea de predicción si existe
-            if fechas_pred is not None and luz_pred is not None:
-                # Convertir predicción de porcentaje a lux
-                luz_pred_lux = [l * max_luz / 100 for l in luz_pred]
+            # Añadir línea de predicción si está disponible
+            if fechas_pred and luz_pred:
                 fig_luz.add_trace(go.Scatter(
                     x=fechas_pred,
-                    y=luz_pred_lux,
+                    y=luz_pred,
                     mode='lines',
                     name='Predicción',
-                    line=dict(color='#dc2626', width=2, dash='dash')
+                    line=dict(color='red', width=1, dash='dash')
                 ))
                 
-                # Línea del 80% en lux
-                fig_luz.add_hline(y=max_luz * 0.8, line_dash="dash", line_color="red",
-                                annotation_text="Límite 80%")
-        
-        fig_luz.update_layout(
-            title='Depreciación de Luz vs Tiempo',
-            yaxis_title='Nivel de Luz (lux)',
-            **common_layout
-        )
-        
-        # Gráfica de humedad
-        fig_hum = go.Figure()
-        fig_hum.add_trace(go.Scatter(
-            x=timestamps,
-            y=humedad,
-            mode='lines',
-            name='Humedad',
-            line=dict(color='#16a34a', width=2)
-        ))
-        fig_hum.update_layout(
-            title='Humedad vs Tiempo',
-            yaxis_title='Humedad (%)',
-            **common_layout
-        )
-        
-        return render_template('index.html',
-                            plot_temp=fig_temp.to_json(),
-                            plot_luz=fig_luz.to_json(),
-                            plot_hum=fig_hum.to_json(),
-                            fecha_80=fecha_80,
-                            sensors=all_sensors, 
-                            selected_sensor=device_id,
-                            start_date=request.args.get('start_date', ''),
-                            end_date=request.args.get('end_date', ''))
+                # Línea al 80%
+                if max_luz:
+                    fig_luz.add_shape(
+                        type="line",
+                        x0=min(timestamps),
+                        y0=max_luz * 0.8,
+                        x1=max(fechas_pred),
+                        y1=max_luz * 0.8,
+                        line=dict(color="red", width=1, dash="dot")
+                    )
+            
+            fig_luz.update_layout(
+                title='Nivel de Luz a lo largo del tiempo',
+                yaxis_title='Luz (lux)',
+                **common_layout
+            )
+            
+            # Convertir figuras a JSON para enviar al template
+            plot_temp = json.dumps(fig_temp, cls=PlotlyJSONEncoder)
+            plot_luz = json.dumps(fig_luz, cls=PlotlyJSONEncoder)
+            
+            return render_template(
+                'sensor_detail.html',
+                sensor_id=sensor_id,
+                plot_temp=plot_temp,
+                plot_luz=plot_luz,
+                start_date=start_date_str,
+                end_date=end_date_str,
+                fecha_80=fecha_80,
+                current_temp=temperaturas[-1] if temperaturas else None,
+                current_luz=luz[-1] if luz else None
+            )
+        else:
+            return render_template(
+                'sensor_detail.html',
+                sensor_id=sensor_id,
+                error="No hay datos disponibles para este sensor en el rango de fechas seleccionado."
+            )
+            
     except Exception as e:
-        print(f"Error en la ruta index: {e}")
-        return f"Error: {str(e)}", 500
+        print(f"Error en detalle del sensor: {e}")
+        import traceback
+        traceback.print_exc()
+        return render_template('sensor_detail.html', sensor_id=sensor_id, error=str(e))
 
-@app.route('/sensors')
-def sensors_endpoint(): # Renombrado para evitar conflicto con la variable
+@app.route('/api/sensors')
+def api_sensors():
+    """API para obtener la lista de sensores"""
+    return jsonify(get_sensors_list())
+
+@app.route('/api/sensor/<sensor_id>')
+def api_sensor_data(sensor_id):
+    """API para obtener datos de un sensor específico"""
     try:
-        unique_sensors = get_unique_sensors()
-        return jsonify(unique_sensors)
+        # No convertir sensor_id a entero
+        timestamps, temperaturas, luz, _, _, _, _ = get_sensor_data(sensor_id)
+        
+        # Convertir timestamps a strings para JSON
+        timestamps_str = [ts.strftime('%Y-%m-%d %H:%M:%S') for ts in timestamps]
+        
+        return jsonify({
+            'timestamps': timestamps_str,
+            'temperatura': temperaturas,
+            'luz': luz
+        })
     except Exception as e:
-        print(f"Error en la ruta /sensors: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5050, debug=True)
+    app.run(debug=True)
