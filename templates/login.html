@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Sistema de Monitoreo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth-compat.js"></script>
+</head>
+<body class="bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen flex items-center justify-center">
+    <div class="max-w-md w-full bg-white rounded-xl shadow-lg p-8">
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800 mb-2">Sistema de Monitoreo</h1>
+            <p class="text-gray-600">Inicia sesión para continuar</p>
+        </div>
+
+        {% if error %}
+        <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6">
+            <p>{{ error }}</p>
+        </div>
+        {% endif %}
+
+        <form id="loginForm" class="space-y-6">
+            <div>
+                <label for="email" class="block text-gray-700 font-medium mb-2">Email</label>
+                <input type="email" id="email" name="email" required 
+                    class="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg focus:ring-blue-500 focus:border-blue-500 p-2.5">
+            </div>
+            <div>
+                <label for="password" class="block text-gray-700 font-medium mb-2">Contraseña</label>
+                <input type="password" id="password" name="password" required 
+                    class="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg focus:ring-blue-500 focus:border-blue-500 p-2.5">
+            </div>
+            <div class="pt-2">
+                <button type="submit" 
+                    class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2.5 px-4 rounded-lg transition-colors">
+                    Iniciar Sesión
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        // Configuración de Firebase
+        const firebaseConfig = {
+            apiKey: "{{ config.apiKey }}",
+            authDomain: "{{ config.authDomain }}",
+            projectId: "{{ config.projectId }}",
+            storageBucket: "{{ config.storageBucket }}",
+            messagingSenderId: "{{ config.messagingSenderId }}",
+            appId: "{{ config.appId }}"
+        };
+
+        // Inicializar Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+
+        // Manejar el envío del formulario
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            // Iniciar sesión con Firebase
+            auth.signInWithEmailAndPassword(email, password)
+                .then((userCredential) => {
+                    // Usuario ha iniciado sesión
+                    const user = userCredential.user;
+                    // Obtener token ID y enviarlo al servidor
+                    return user.getIdToken();
+                })
+                .then((idToken) => {
+                    // Enviar token al servidor para validación
+                    return fetch('/login', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ idToken })
+                    });
+                })
+                .then(response => {
+                    if (response.ok) {
+                        // Redirigir a la página principal
+                        window.location.href = '/';
+                    } else {
+                        throw new Error('Error en la autenticación del servidor');
+                    }
+                })
+                .catch((error) => {
+                    // Manejar errores
+                    alert('Error: ' + error.message);
+                    console.error(error);
+                });
+        });
+
+        // Comprobar si el usuario ya está autenticado
+        auth.onAuthStateChanged(function(user) {
+            if (user) {
+                // Si ya hay una sesión activa, obtener token y validar en el servidor
+                user.getIdToken().then(idToken => {
+                    fetch('/check-auth', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ idToken })
+                    })
+                    .then(response => {
+                        if (response.ok) {
+                            window.location.href = '/';
+                        }
+                    });
+                });
+            }
+        });
+    </script>
+</body>
+</html> 

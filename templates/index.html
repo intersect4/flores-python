@@ -3,144 +3,189 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Monitoreo de Sensores</title>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <title>Sistema de Monitoreo</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gradient-to-br from-gray-50 to-gray-100 min-h-screen">
+    <!-- Header con fecha, estado y usuario -->
+    <div class="bg-white shadow-md py-2">
+        <div class="container mx-auto px-4 flex justify-between items-center">
+            <div class="text-gray-700">
+                <span class="font-medium">Fecha:</span> <span id="current-time">{{ current_date }}</span>
+            </div>
+            <div class="flex items-center">
+                <span class="font-medium mr-2">Estado Bombilla:</span>
+                <div id="led-indicator" class="w-4 h-4 rounded-full mr-1 {% if led_state %}bg-green-500{% else %}bg-red-500{% endif %}"></div>
+                <span id="led-text">{{ 'Encendido' if led_state else 'Apagado' }}</span>
+            </div>
+            <div class="flex items-center">
+                <span class="text-gray-700 mr-3">{{ user.email }}</span>
+                <a href="{{ url_for('logout') }}" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-sm transition-colors">
+                    Cerrar Sesión
+                </a>
+            </div>
+        </div>
+    </div>
+
     <div class="container mx-auto px-4 py-8">
         <div class="mb-8 text-center">
             <h1 class="text-4xl font-bold text-gray-800 mb-2">Panel de Monitoreo</h1>
             <p class="text-gray-600">Sistema de Monitoreo de Sensores en Tiempo Real</p>
         </div>
 
-        <div class="grid grid-cols-1 gap-8">
-            <!-- Panel de Control -->
-            <div class="bg-white rounded-xl shadow-lg p-6">
-                <form class="grid grid-cols-1 md:grid-cols-4 gap-4" method="GET" action="/">
-                    <div>
-                        <label class="block text-gray-700 font-medium mb-2">Sensor:</label>
-                        <select id="sensorSelect" name="device_id" class="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg focus:ring-blue-500 focus:border-blue-500 p-2.5">
-                            {% for sensor in sensors %}
-                                <option value="{{ sensor }}" {% if sensor == selected_sensor %}selected{% endif %}>{{ sensor }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div>
-                        <label class="block text-gray-700 font-medium mb-2">Fecha Inicio:</label>
-                        <input type="date" name="start_date" value="{{ start_date }}" class="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg focus:ring-blue-500 focus:border-blue-500 p-2.5">
-                    </div>
-                    <div>
-                        <label class="block text-gray-700 font-medium mb-2">Fecha Fin:</label>
-                        <input type="date" name="end_date" value="{{ end_date }}" class="w-full bg-gray-50 border border-gray-300 text-gray-900 rounded-lg focus:ring-blue-500 focus:border-blue-500 p-2.5">
-                    </div>
-                    <div class="flex items-end">
-                        <button type="submit" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2.5 px-4 rounded-lg transition-colors">
-                            Actualizar Datos
-                        </button>
-                    </div>
-                </form>
-            </div>
+        <!-- Depuración -->
+        <div class="bg-gray-100 p-4 mb-4 rounded">
+            <h3 class="font-bold mb-2">Información Diagnóstica:</h3>
+            <p>Sensores encontrados: {{ sensors|length }}</p>
+            <ul class="list-disc pl-5">
+                {% for sensor in sensors %}
+                <li>ID: {{ sensor.id }} - Nombre mostrado: {{ sensor.name }}</li>
+                {% endfor %}
+            </ul>
+        </div>
 
-            <!-- Valores Actuales -->
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div class="bg-white rounded-lg shadow p-6">
-                    <h3 class="text-lg font-semibold text-gray-800 mb-2">Temperatura</h3>
-                    <p class="text-3xl font-bold text-blue-600" id="temp-actual">--°C</p>
-                    <p class="text-sm text-gray-500 mt-2">Última lectura</p>
-                </div>
-                <div class="bg-white rounded-lg shadow p-6">
-                    <h3 class="text-lg font-semibold text-gray-800 mb-2">Nivel de Luz</h3>
-                    <p class="text-3xl font-bold text-yellow-600" id="luz-actual">-- lux</p>
-                    <p class="text-sm text-gray-500 mt-2">Última lectura</p>
-                </div>
-                <div class="bg-white rounded-lg shadow p-6">
-                    <h3 class="text-lg font-semibold text-gray-800 mb-2">Humedad</h3>
-                    <p class="text-3xl font-bold text-green-600" id="hum-actual">--%</p>
-                    <p class="text-sm text-gray-500 mt-2">Última lectura</p>
-                </div>
-            </div>
+        {% if error %}
+        <div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6">
+            <p>{{ error }}</p>
+        </div>
+        {% endif %}
 
-            {% if fecha_80 %}
-            <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4">
-                <div class="flex">
-                    <div class="flex-shrink-0">
-                        <svg class="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {% for sensor in sensors %}
+            <a href="{{ url_for('sensor_detail', sensor_id=sensor.id) }}" class="group">
+                <div class="bg-white rounded-xl shadow-md hover:shadow-xl transition-shadow p-6 flex flex-col items-center justify-center h-72">
+                    <div class="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mb-4 group-hover:bg-blue-200 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z" />
                         </svg>
                     </div>
-                    <div class="ml-3">
-                        <p class="text-sm text-yellow-700">
-                            Según la tendencia actual, la intensidad de luz caerá por debajo del 80% aproximadamente el 
-                            <strong>{{ fecha_80.strftime('%d/%m/%Y') }}</strong>
-                        </p>
+                    <h3 class="text-xl font-bold text-gray-800 mb-1">{{ sensor.name }}</h3>
+                    <div class="w-full flex justify-center mb-2">
+                        {% set folder = sensor.name.split('_')[-1]|replace('0','') %}
+                        {% set folder_num = sensor.name.split('_')[-1][-2:]|replace('0','') %}
+                        {% set folder_num = folder_num if folder_num|length == 1 else folder_num[-1] %}
+                        {% set folder_num = folder_num|int %}
+                        {% set folder_num = folder_num if folder_num > 0 else 1 %}
+                        {% set img_folder = 'public/' ~ folder_num %}
+                        <div class="relative w-40 h-28 overflow-hidden rounded-lg" id="carousel-{{ loop.index }}">
+                            {% for img_path in sensor.images %}
+                                <img src="{{ img_path }}" class="absolute inset-0 w-full h-full object-cover transition-opacity duration-700 opacity-0 {% if loop.index0 == 0 %}opacity-100{% endif %}" data-carousel-img="{{ loop.index }}">
+                            {% endfor %}
+                        </div>
                     </div>
+                    <p class="text-sm text-gray-500">Haz clic para ver detalles</p>
                 </div>
+            </a>
+            {% else %}
+            <div class="col-span-full text-center py-12">
+                <p class="text-gray-500">No hay sensores disponibles</p>
             </div>
-            {% endif %}
-
-            <!-- Gráficas -->
-            <div class="space-y-6">
-                <div class="bg-white rounded-lg shadow-lg p-6">
-                    <div id="temp-plot" class="w-full h-[400px]"></div>
-                </div>
-                <div class="bg-white rounded-lg shadow-lg p-6">
-                    <div id="luz-plot" class="w-full h-[400px]"></div>
-                </div>
-                <div class="bg-white rounded-lg shadow-lg p-6">
-                    <div id="hum-plot" class="w-full h-[400px]"></div>
-                </div>
-            </div>
+            {% endfor %}
         </div>
     </div>
 
     <script>
-        // Configuración inicial de las gráficas
-        const graphs_temp = {{ plot_temp | safe }};
-        const graphs_luz = {{ plot_luz | safe }};
-        const graphs_hum = {{ plot_hum | safe }};
+        // Función para actualizar la fecha y hora
+        function updateDateTime() {
+            const now = new Date();
+            const options = { 
+                day: '2-digit', 
+                month: '2-digit', 
+                year: 'numeric',
+                hour: '2-digit', 
+                minute: '2-digit', 
+                second: '2-digit',
+                hour12: false
+            };
+            const formattedDate = now.toLocaleDateString('es-ES', options).replace(/\//g, '/');
+            document.getElementById('current-time').textContent = formattedDate;
+        }
+
+        // Actualizar inmediatamente al cargar
+        updateDateTime();
         
-        const commonConfig = {
-            responsive: true,
-            displayModeBar: false
-        };
+        // Actualizar cada segundo
+        setInterval(updateDateTime, 1000);
 
-        // Personalización de temas para cada gráfica
-        graphs_temp.layout.paper_bgcolor = 'rgba(0,0,0,0)';
-        graphs_temp.layout.plot_bgcolor = 'rgba(0,0,0,0)';
-        graphs_temp.layout.margin = { t: 30, r: 20, b: 40, l: 50 };
-        graphs_temp.layout.font = { family: 'Arial, sans-serif' };
-        graphs_temp.data[0].line = { color: '#2563eb', width: 2 };
-
-        graphs_luz.layout.paper_bgcolor = 'rgba(0,0,0,0)';
-        graphs_luz.layout.plot_bgcolor = 'rgba(0,0,0,0)';
-        graphs_luz.layout.margin = { t: 30, r: 20, b: 40, l: 50 };
-        graphs_luz.layout.font = { family: 'Arial, sans-serif' };
-
-        graphs_hum.layout.paper_bgcolor = 'rgba(0,0,0,0)';
-        graphs_hum.layout.plot_bgcolor = 'rgba(0,0,0,0)';
-        graphs_hum.layout.margin = { t: 30, r: 20, b: 40, l: 50 };
-        graphs_hum.layout.font = { family: 'Arial, sans-serif' };
-        graphs_hum.data[0].line = { color: '#16a34a', width: 2 };
-
-        Plotly.newPlot('temp-plot', graphs_temp.data, graphs_temp.layout, commonConfig);
-        Plotly.newPlot('luz-plot', graphs_luz.data, graphs_luz.layout, commonConfig);
-        Plotly.newPlot('hum-plot', graphs_hum.data, graphs_hum.layout, commonConfig);
-
-        // Actualizar valores actuales
-        if (graphs_temp.data[0].y.length > 0) {
-            document.getElementById('temp-actual').textContent = 
-                graphs_temp.data[0].y[graphs_temp.data[0].y.length - 1].toFixed(1) + '°C';
-        }
-        if (graphs_luz.data[0].y.length > 0) {
-            document.getElementById('luz-actual').textContent = 
-                graphs_luz.data[0].y[graphs_luz.data[0].y.length - 1].toFixed(0) + ' lux';
-        }
-        if (graphs_hum.data[0].y.length > 0) {
-            document.getElementById('hum-actual').textContent = 
-                graphs_hum.data[0].y[graphs_hum.data[0].y.length - 1].toFixed(1) + '%';
+        // Función para manejar respuestas de la API
+        function handleApiResponse(response) {
+            if (response.ok) {
+                return response.json();
+            }
+            
+            if (response.status === 401) {
+                // Redirigir al login si no está autenticado
+                window.location.href = '/login';
+                throw new Error('No autenticado');
+            }
+            
+            throw new Error('Error en la respuesta del servidor');
         }
 
+        // Función para actualizar el estado del LED
+        function updateLedState() {
+            fetch('/api/led_state')
+                .then(handleApiResponse)
+                .then(data => {
+                    const ledIndicator = document.getElementById('led-indicator');
+                    const ledText = document.getElementById('led-text');
+                    
+                    // Actualizar el color del indicador
+                    if (data.state) {
+                        ledIndicator.classList.remove('bg-red-500');
+                        ledIndicator.classList.add('bg-green-500');
+                        ledText.textContent = 'Encendido';
+                    } else {
+                        ledIndicator.classList.remove('bg-green-500');
+                        ledIndicator.classList.add('bg-red-500');
+                        ledText.textContent = 'Apagado';
+                    }
+                })
+                .catch(error => {
+                    if (error.message !== 'No autenticado') {
+                        console.error('Error al obtener estado del LED:', error);
+                    }
+                });
+        }
+
+        // Actualizar el estado del LED cada 5 segundos
+        setInterval(updateLedState, 5000);
+        
+        // También actualizar inmediatamente
+        updateLedState();
     </script>
+<script>
+    if (window.firebase && firebase.auth) {
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                firebase.auth().signOut().then(function() {
+                    window.location.href = '/logout';
+                });
+            });
+        }
+    }
+    </script>
+<script>
+// Carrusel automático para cada card
+window.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('[id^="carousel-"]').forEach((carousel, idx) => {
+        const imgs = Array.from(carousel.querySelectorAll('img[data-carousel-img]')).filter(img => img.complete && img.naturalWidth > 0);
+        if (imgs.length === 0) return;
+        let current = 0;
+        imgs.forEach((img, i) => img.classList.toggle('opacity-100', i === current));
+        imgs.forEach((img, i) => img.classList.toggle('opacity-0', i !== current));
+        setInterval(() => {
+            imgs[current].classList.remove('opacity-100');
+            imgs[current].classList.add('opacity-0');
+            current = (current + 1) % imgs.length;
+            imgs[current].classList.remove('opacity-0');
+            imgs[current].classList.add('opacity-100');
+        }, 10000);
+    });
+});
+</script>
 </body>
+
 </html> 
